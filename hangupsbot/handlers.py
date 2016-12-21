@@ -301,7 +301,7 @@ class HandlerBridge:
         elif event is hangups.RenameEvent:
             event_type = "rename"
         elif type(event) is str:
-            event_type = str # accept all kinds of strings, just like register_handler
+            event_type = event # accept all kinds of strings, just like register_handler
         else:
             raise ValueError("unrecognised event {}".format(event))
 

@@ -35,6 +35,7 @@ class TelegramBot(telepot.async.Bot):
             self.onLocationShareCallback = TelegramBot.on_location_share
             self.onSupergroupUpgradeCallback = TelegramBot.on_supoergroup_upgrade
             self.ho_bot = hangupsbot
+            self.sending = 0
         else:
             logger.info('telesync disabled in config.json')
 
@@ -236,9 +237,14 @@ def tg_on_message(tg_bot, tg_chat_id, msg):
                                                                 text=msg['text'])
 
         ho_conv_id = tg2ho_dict[str(tg_chat_id)]
-        yield from tg_bot.ho_bot.coro_send_message(ho_conv_id, text)
+        if tg_bot.sending and ': ' in msg['text']:
+            logger.debug("tg_on_message: tg_bot.sending="+str(tg_bot.sending)+"; message"+msg['text'])
+            yield
+        else:
+            tg_bot.sending += 1
+            yield from tg_bot.ho_bot.coro_send_message(ho_conv_id, text)
 
-        logger.info("[TELESYNC] Telegram message forwarded: {msg} to: {ho_conv_id}".format(msg=msg['text'],
+            logger.info("[TELESYNC] Telegram message forwarded: {msg} to: {ho_conv_id}".format(msg=msg['text'],
                                                                                            ho_conv_id=ho_conv_id))
 
 
@@ -627,7 +633,7 @@ def is_animated_photo(file_name):
     return True if get_photo_extension(file_name).endswith((".gif", ".gifv", ".webm", ".mp4")) else False
 
 
-@handler.register(priority=5, event=hangups.ChatMessageEvent)
+@handler.register(priority=5, event="allmessages")
 def _on_hangouts_message(bot, event, command=""):
     global tg_bot
 
@@ -646,13 +652,26 @@ def _on_hangouts_message(bot, event, command=""):
     ho2tg_dict = bot.memory.get_by_path(['telesync'])['ho2tg']
 
     if event.conv_id in ho2tg_dict:
-        user_gplus = 'https://plus.google.com/u/0/{uid}/about'.format(uid=event.user_id.chat_id)
-        text = '<a href="{user_gplus}">{uname}</a> <b>({gname})</b>: {text}'.format(uname=event.user.full_name,
+        text = ''
+        if bot.user_self()["chat_id"] == event.user_id.chat_id:
+           text = '{text}'.format(text=sync_text)
+        else:
+            user_gplus = 'https://plus.google.com/u/0/{uid}/about'.format(uid=event.user_id.chat_id)
+            text = '<a href="{user_gplus}">{uname}</a> <b>({gname})</b>: {text}'.format(uname=event.user.full_name,
                                                                                     user_gplus=user_gplus,
                                                                                     gname=event.conv.name,
                                                                                     text=sync_text)
-        yield from tg_bot.sendMessage(ho2tg_dict[event.conv_id], text, parse_mode='html',
+        if tg_bot.sending and ': ' in sync_text:
+            has_photo = False
+            tg_bot.sending = max(tg_bot.sending-1,0)
+            logger.debug("_on_hangouts_message: tg_bot.sending="+str(tg_bot.sending)+";msg="+sync_text)
+            yield
+        else:
+            tg_bot.sending += 0
+            yield from tg_bot.sendMessage(ho2tg_dict[event.conv_id], text, parse_mode='html',
                                       disable_web_page_preview=True)
+            tg_bot.sending -= 0
+
         if has_photo:
             photo_name = "{rand}-{file_name}".format(rand=random.randint(1, 100000), file_name=photo_file_name)
             photo_path = 'hangupsbot/plugins/telesync/telesync_photos/' + photo_name

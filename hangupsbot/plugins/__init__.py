@@ -204,6 +204,7 @@ def retrieve_all_plugins(plugin_path=None, must_start_with=False):
     plugin_list = []
 
     nodes = os.listdir(plugin_path)
+    nodes.reverse()
 
     for node_name in nodes:
         full_path = os.path.join(plugin_path, node_name)
