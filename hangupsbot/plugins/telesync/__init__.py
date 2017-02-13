@@ -36,8 +36,24 @@ class TelegramBot(telepot.async.Bot):
             self.onSupergroupUpgradeCallback = TelegramBot.on_supoergroup_upgrade
             self.ho_bot = hangupsbot
             self.sending = 0
+            self.justUploadImage = 0
+            self.lastMessage = 'bcd123'
         else:
             logger.info('telesync disabled in config.json')
+
+    def __del__(self):
+        self.cleanup_myself()
+
+    def cleanup_myself(self):
+        logger.info("cleanup_myself: TelegramBot cleaning up self...");
+        self.onMessageCallback = TelegramBot.on_message
+        self.onPhotoCallback = TelegramBot.on_photo
+        self.onUserJoinCallback = TelegramBot.on_user_join
+        self.onUserLeaveCallback = TelegramBot.on_user_leave
+        self.onLocationShareCallback = TelegramBot.on_location_share
+        self.onSupergroupUpgradeCallback = TelegramBot.on_supoergroup_upgrade
+        self.ho_bot = None
+        self.commands.clear();
 
     def add_command(self, cmd, func):
         self.commands[cmd] = func
@@ -238,15 +254,16 @@ def tg_on_message(tg_bot, tg_chat_id, msg):
 
         ho_conv_id = tg2ho_dict[str(tg_chat_id)]
         if tg_bot.sending and ': ' in msg['text']:
-            logger.debug("tg_on_message: tg_bot.sending="+str(tg_bot.sending)+"; message"+msg['text'])
+            logger.info("tg_on_message: tg_bot.sending="+str(tg_bot.sending)+"; message"+msg['text'])
             yield
         else:
             tg_bot.sending += 1
+            tg_bot.lastMessage = text
+            logger.info("tg_on_message: tg_bot.sending="+str(tg_bot.sending))
             yield from tg_bot.ho_bot.coro_send_message(ho_conv_id, text)
 
             logger.info("[TELESYNC] Telegram message forwarded: {msg} to: {ho_conv_id}".format(msg=msg['text'],
                                                                                            ho_conv_id=ho_conv_id))
-
 
 @asyncio.coroutine
 def tg_on_photo(tg_bot, tg_chat_id, msg):
@@ -275,6 +292,7 @@ def tg_on_photo(tg_bot, tg_chat_id, msg):
         yield from tg_bot.download_file(photo_id, photo_path)
 
         logger.info("[TELESYNC] Uploading photo...")
+        tg_bot.justUploadImage += 1
         with open(photo_path, "rb") as photo_file:
             ho_photo_id = yield from tg_bot.ho_bot._client.upload_image(photo_file,
                                                                         filename=os.path.basename(photo_path))
@@ -536,6 +554,12 @@ def _initialise(bot):
 
     if telesync_config['enabled']:
         global tg_bot
+
+        if (tg_bot):
+            logger.info("_initialise: Existing tg_bot detected, deleting the former one...");
+            tg_bot.cleanup_myself()
+            del tg_bot
+
         tg_bot = TelegramBot(bot)
         tg_bot.set_on_message_callback(tg_on_message)
         tg_bot.set_on_photo_callback(tg_on_photo)
@@ -636,6 +660,7 @@ def is_animated_photo(file_name):
 @handler.register(priority=5, event="allmessages")
 def _on_hangouts_message(bot, event, command=""):
     global tg_bot
+    logger.info("_on_hangouts_message: Got message! tg_bot.sending="+str(tg_bot.sending)+";msg="+event.text)
 
     if event.text.startswith('/'):  # don't sync /bot commands
         return
@@ -661,16 +686,24 @@ def _on_hangouts_message(bot, event, command=""):
                                                                                     user_gplus=user_gplus,
                                                                                     gname=event.conv.name,
                                                                                     text=sync_text)
+
+        #if tg_bot.lastMessage in text:
+        #   logger.debug("_on_hangouts_message: Seen message! tg_bot.sending="+str(tg_bot.sending)+";msg="+sync_text)
+        #   tg_bot.sending = max(tg_bot.sending-1,0)
+        #   yield
         if tg_bot.sending and ': ' in sync_text:
+            logger.info("_on_hangouts_message: TG just send to HO! tg_bot.sending="+str(tg_bot.sending)+";msg="+sync_text)
             has_photo = False
-            tg_bot.sending = max(tg_bot.sending-1,0)
-            logger.debug("_on_hangouts_message: tg_bot.sending="+str(tg_bot.sending)+";msg="+sync_text)
+            tg_bot.sending = max(0,tg_bot.sending-1)
             yield
+        elif tg_bot.justUploadImage:
+            # this is a recently uploaded image 
+            logger.info("_on_hangouts_message: Ignoring recently uploaded image: " + photo_url)
+            has_photo = False
+            tg_bot.justUploadImage = max(0,tg_bot.justUploadImage-1)
         else:
-            tg_bot.sending += 0
             yield from tg_bot.sendMessage(ho2tg_dict[event.conv_id], text, parse_mode='html',
                                       disable_web_page_preview=True)
-            tg_bot.sending -= 0
 
         if has_photo:
             photo_name = "{rand}-{file_name}".format(rand=random.randint(1, 100000), file_name=photo_file_name)
