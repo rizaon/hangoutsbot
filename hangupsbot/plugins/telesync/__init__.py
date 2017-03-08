@@ -12,6 +12,7 @@ import telepot.exception
 from handlers import handler
 from commands import command
 import random
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class TelegramBot(telepot.async.Bot):
             self.sending = 0
             self.justUploadImage = 0
             self.lastMessage = 'bcd123'
+            self.lastMsgTime = time.time()
         else:
             logger.info('telesync disabled in config.json')
 
@@ -257,8 +259,10 @@ def tg_on_message(tg_bot, tg_chat_id, msg):
             logger.info("tg_on_message: tg_bot.sending="+str(tg_bot.sending)+"; message"+msg['text'])
             yield
         else:
-            tg_bot.sending += 1
+            now = time.time()
+            tg_bot.sending = 1 if (now-tg_bot.lastMsgTime>10) else tg_bot.sending+1
             tg_bot.lastMessage = text
+            tg_bot.lastMsgTime = now
             logger.info("tg_on_message: tg_bot.sending="+str(tg_bot.sending))
             yield from tg_bot.ho_bot.coro_send_message(ho_conv_id, text)
 
@@ -536,6 +540,10 @@ tg_bot = None
 
 
 def _initialise(bot):
+    global tg_bot
+    logger.info("_initialise: Deleting former tg_bot... if any...");
+    del tg_bot
+
     if not bot.config.exists(['telesync']):
         bot.config.set_by_path(['telesync'], {'api_key': "PUT_YOUR_TELEGRAM_API_KEY_HERE",
                                               'enabled': True,
@@ -553,12 +561,6 @@ def _initialise(bot):
     telesync_config = bot.config.get_by_path(['telesync'])
 
     if telesync_config['enabled']:
-        global tg_bot
-
-        if (tg_bot):
-            logger.info("_initialise: Existing tg_bot detected, deleting the former one...");
-            tg_bot.cleanup_myself()
-            del tg_bot
 
         tg_bot = TelegramBot(bot)
         tg_bot.set_on_message_callback(tg_on_message)
